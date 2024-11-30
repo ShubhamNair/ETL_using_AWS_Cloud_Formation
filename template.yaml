@@ -1,0 +1,178 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "CloudFormation Template for AWS Glue Workflow with IAM Role Creation"
+
+Parameters:
+  GlueRole:
+    Description: "IAM Role to be used for AWS Glue resources"
+    Type: String
+    Default: "LabRole"
+
+Resources:
+  # Glue Database
+  GlueDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: s3lab4in-shubham121
+
+  # Glue Crawler
+  GlueCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: lab4db-crawler
+      Role: !Ref GlueRole
+      DatabaseName: s3lab4in-shubham121
+      Targets:
+        S3Targets:
+          - Path: "s3://s3lab4in-shubham121/"
+      TablePrefix: in_
+    DependsOn: GlueDatabase
+
+  # Glue ETL Job for JSON
+  GlueETLJobJSON:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: etl-job-json
+      Role: !Ref GlueRole
+      Command:
+        Name: glueetl
+        ScriptLocation: "s3://s3lab4in-shubham121/scripts/etl_json_script.py"
+      DefaultArguments:
+        "--TempDir": "s3://s3lab4out-shubham/temp/"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--DATABASE_NAME": "s3lab4in-shubham121"
+        "--INPUT_TABLE_NAME": "in_iris_json"
+        "--OUTPUT_S3_PATH": "s3://s3lab4out-shubham/lab4-output/"
+        "--OUTPUT_TABLE_NAME": "out_json_iris"
+      GlueVersion: "3.0"
+      MaxRetries: 3
+      MaxCapacity: 2
+      Timeout: 5
+    DependsOn: GlueCrawler
+
+  # Glue ETL Job for Parquet
+  GlueETLJobParquet:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: etl-job-parquet
+      Role: !Ref GlueRole
+      Command:
+        Name: glueetl
+        ScriptLocation: "s3://s3lab4in-shubham121/scripts/etl_parquet_script.py"
+      DefaultArguments:
+        "--TempDir": "s3://s3lab4out-shubham/temp/"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--DATABASE_NAME": "s3lab4in-shubham121"
+        "--INPUT_TABLE_NAME": "yellow_tripdata_2024_01_parquet"
+        "--OUTPUT_S3_PATH": "s3://s3lab4out-shubham/lab4-output/"
+        "--OUTPUT_TABLE_NAME": "out-taxi-parquet"
+      GlueVersion: "3.0"
+      MaxRetries: 3
+      MaxCapacity: 2
+      Timeout: 5
+    DependsOn: GlueCrawler
+
+  # Glue ETL Job for Avro
+  GlueETLJobAvro:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: etl-job-avro
+      Role: !Ref GlueRole
+      Command:
+        Name: glueetl
+        ScriptLocation: "s3://s3lab4in-shubham121/scripts/etl_avro_script.py"
+      DefaultArguments:
+        "--TempDir": "s3://s3lab4out-shubham/temp/"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--DATABASE_NAME": "s3lab4in-shubham121"
+        "--INPUT_TABLE_NAME": "california_housing_avro"
+        "--OUTPUT_S3_PATH": "s3://s3lab4out-shubham/lab4-output/"
+        "--OUTPUT_TABLE_NAME": "out_housing_avro"
+      GlueVersion: "3.0"
+      MaxRetries: 3
+      MaxCapacity: 2
+      Timeout: 5
+    DependsOn: GlueCrawler
+
+  # Glue ETL Job for CSV
+  GlueETLJobCSV:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: etl-job-csv
+      Role: !Ref GlueRole
+      Command:
+        Name: glueetl
+        ScriptLocation: "s3://s3lab4in-shubham121/scripts/etl_csv_script.py"
+      DefaultArguments:
+        "--TempDir": "s3://s3lab4out-shubham/temp/"
+        "--job-bookmark-option": "job-bookmark-disable"
+        "--DATABASE_NAME": "s3lab4in-shubham121"
+        "--INPUT_TABLE_NAME": "titanic_csv"
+        "--OUTPUT_S3_PATH": "s3://s3lab4out-shubham/lab4-output/"
+        "--OUTPUT_TABLE_NAME": "out_titanic_csv"
+      GlueVersion: "3.0"
+      MaxRetries: 3
+      MaxCapacity: 2
+      Timeout: 5
+    DependsOn: GlueCrawler
+
+  # Glue Workflow
+  GlueWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties:
+      Name: lab4-workflow
+    DependsOn:
+      - GlueETLJobJSON
+      - GlueETLJobParquet
+      - GlueETLJobAvro
+      - GlueETLJobCSV
+
+  # Starting Trigger for Workflow (Cron Job)
+  StartingWorkflowTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: starting-workflow-trigger
+      Type: SCHEDULED
+      Schedule: cron(7 * * * ? *)  # Runs hourly at 7 minutes past the hour
+      Actions:
+        - CrawlerName: !Ref GlueCrawler
+      WorkflowName: !Ref GlueWorkflow
+
+  # Conditional Trigger for ETL Jobs
+  WorkflowTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: workflow-trigger
+      Type: CONDITIONAL
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            CrawlerName: !Ref GlueCrawler
+            CrawlState: SUCCEEDED
+      Actions:
+        - JobName: !Ref GlueETLJobJSON
+        - JobName: !Ref GlueETLJobParquet
+        - JobName: !Ref GlueETLJobAvro
+        - JobName: !Ref GlueETLJobCSV
+      WorkflowName: !Ref GlueWorkflow
+
+
+  # Scheduled Trigger for Crawler
+  ScheduledCrawlerTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: scheduled-crawler-trigger
+      Type: SCHEDULED
+      Schedule: cron(7 * * * ? *)  # Runs hourly at 7 minutes past the hour
+      Actions:
+        - CrawlerName: !Ref GlueCrawler
+
+Outputs:
+  GlueDatabaseName:
+    Description: "The Glue database for cataloging input and output data"
+    Value: "s3lab4in-shubham121"
+
+  WorkflowARN:
+    Description: "The ARN of the Glue Workflow"
+    Value: !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:workflow/lab4-workflow"
